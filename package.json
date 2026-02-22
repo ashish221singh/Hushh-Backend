@@ -20,7 +20,9 @@
     "openapi:check": "node scripts/openapi-check.js",
     "pilot:qa": "npm run smoke:test && npm run matching-policy:test && npm run past-meets:test && npm run readiness:test && npm run auth-hardening:test && npm run openapi:check",
     "pilot:config-check": "bash scripts/pilot-config-check.sh",
-    "pilot:health-check": "bash scripts/pilot-health-check.sh"
+    "pilot:health-check": "bash scripts/pilot-health-check.sh",
+    "pilot:cloud-safe:test": "node scripts/pilot-cloud-safe-test.js",
+    "pilot:admin-ops:test": "node scripts/pilot-admin-ops-check.js"
   },
   "dependencies": {
     "@prisma/client": "^6.3.1"

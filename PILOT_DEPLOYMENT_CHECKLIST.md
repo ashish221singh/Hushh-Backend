@@ -25,12 +25,15 @@ Validation:
 ```bash
 cd backend
 npm run pilot:config-check
+BASE_URL=https://<pilot-api-domain> ADMIN_KEY=<admin_key> npm run pilot:cloud-safe:test
+BASE_URL=https://<pilot-api-domain> ADMIN_KEY=<admin_key> npm run pilot:admin-ops:test
 ```
 
 ## C) Health / Readiness
 
 - [ ] `/health` returns 200 and `status=ok`
 - [ ] `/api/v1/admin/db-status` returns `healthy=true`
+- [ ] Runtime flags are pilot-safe (`dev/admin matcher seed disabled`, OTP fallback disabled)
 
 Validation:
 

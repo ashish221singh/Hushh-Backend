@@ -130,7 +130,20 @@ Pilot preflight checks:
 cd backend
 npm run pilot:config-check
 BASE_URL=http://localhost:3001 ADMIN_KEY=dev-admin-key npm run pilot:health-check
+BASE_URL=http://localhost:3001 ADMIN_KEY=dev-admin-key npm run pilot:cloud-safe:test
+BASE_URL=http://localhost:3001 ADMIN_KEY=dev-admin-key npm run pilot:admin-ops:test
 ```
+
+`pilot:cloud-safe:test` is read-only and validates:
+- runtime safety flags are locked for pilot (`dev/admin seed` disabled, OTP fallback disabled)
+- health + db-status
+- admin logs access
+- protected routes still require auth
+
+`pilot:admin-ops:test` is read-only and validates:
+- admin match groups visibility for committed groups
+- admin meets visibility for venue operations
+- admin queue telemetry visibility
 
 Deployment checklist:
 - `backend/PILOT_DEPLOYMENT_CHECKLIST.md`

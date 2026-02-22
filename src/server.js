@@ -407,6 +407,15 @@ function collectAdminOverview() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
       .map(([path, count]) => ({ path, count })),
+    runtime: {
+      auth_mode: AUTH_MODE,
+      allow_otp_fallback: ALLOW_OTP_FALLBACK,
+      allow_found_fallback: ALLOW_FOUND_FALLBACK,
+      dev_match_helpers_enabled: DEV_MATCH_HELPERS_ENABLED,
+      admin_matcher_seed_enabled: ADMIN_MATCHER_SEED_ENABLED,
+      push_provider: PUSH_PROVIDER,
+      payment_provider: getPaymentProviderName(),
+    },
   };
 }
 
@@ -3663,6 +3672,9 @@ function renderAdminHtml() {
     .panel-title { margin:0; font-size:15px; }
     .pill { border-radius:999px; padding:2px 8px; font-size:11px; background:#f5f5f5; border:1px solid var(--line); }
     .danger { color:var(--danger); }
+    .ok { color:#166534; }
+    .warn { color:#92400e; }
+    .bad { color:#b91c1c; }
     .list { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
     .row { display:grid; grid-template-columns: 1fr auto; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid #f0f0f0; }
     .row:last-child { border-bottom:none; }
@@ -3672,6 +3684,10 @@ function renderAdminHtml() {
     button.secondary { background:#fff; color:#171717; border:1px solid var(--line); }
     input, select, textarea { min-height:36px; border:1px solid #d4d4d4; border-radius:8px; padding:0 10px; background:#fff; }
     textarea { min-height:88px; padding:10px; font-size:12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .help { background:#fafafa; border:1px dashed #d4d4d4; border-radius:10px; padding:10px; font-size:12px; color:#525252; }
+    .help ol { margin:0 0 0 18px; padding:0; display:grid; gap:6px; }
+    .smallbtn { min-height:28px; padding:0 8px; font-size:11px; }
+    .inline { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .api-grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
     .modal { position:fixed; inset:0; background:rgba(0,0,0,.38); display:none; align-items:center; justify-content:center; padding:16px; z-index:20; }
     .modal-card { width:min(1000px,100%); max-height:80vh; overflow:auto; background:#fff; border-radius:12px; border:1px solid var(--line); padding:12px; }
@@ -3684,24 +3700,42 @@ function renderAdminHtml() {
   <div class="wrap">
     <div class="card">
       <div class="top">
-        <h2 class="title">Hushh Admin Dashboard</h2>
-        <input id="adminKey" placeholder="ADMIN_KEY" style="min-width:220px" />
+        <h2 class="title">Hushh Pilot Operations</h2>
+        <input id="adminKey" placeholder="Admin Key" style="min-width:220px" />
         <button id="loadBtn">Load</button>
         <button id="refreshBtn" class="secondary">Refresh</button>
         <span id="status" class="muted"></span>
       </div>
-      <div class="muted">Compact latest view. Use “View Full” on each panel for complete data.</div>
+      <div class="muted">Manager view for pilot operations. No coding needed. Use Load, then follow Quick Actions below.</div>
     </div>
 
     <div id="content" style="display:none">
+      <div class="grid2">
+        <div class="card">
+          <div class="panel-head"><h3 class="panel-title">Quick Actions (Daily)</h3></div>
+          <div class="help">
+            <ol>
+              <li>Check <strong>System Health</strong> and <strong>Safety Flags</strong> below.</li>
+              <li>Open <strong>Groups Ready For Venue Share</strong> and pick a group.</li>
+              <li>Fill venue details and click <strong>Share Venue + Notify</strong>.</li>
+              <li>Watch <strong>Latest Failures</strong> and <strong>Issue Summary</strong> for errors.</li>
+            </ol>
+          </div>
+        </div>
+        <div class="card">
+          <div class="panel-head"><h3 class="panel-title">System Health</h3></div>
+          <table id="runtimeStatusTable"></table>
+        </div>
+      </div>
+
       <div class="card">
-        <div class="panel-head"><h3 class="panel-title">Overview</h3></div>
+        <div class="panel-head"><h3 class="panel-title">Business Overview</h3></div>
         <div id="metrics" class="grid"></div>
       </div>
 
       <div class="grid2">
         <div class="card">
-          <div class="panel-head"><h3 class="panel-title">Latest Users</h3><button class="secondary" id="fullUsersBtn">View Full</button></div>
+          <div class="panel-head"><h3 class="panel-title">Recent Users</h3><button class="secondary" id="fullUsersBtn">View Full</button></div>
           <div id="latestUsers" class="list"></div>
         </div>
         <div class="card">
@@ -3725,21 +3759,23 @@ function renderAdminHtml() {
 
       <div class="grid2">
         <div class="card">
-          <div class="panel-head"><h3 class="panel-title">Latest API Logs</h3><button class="secondary" id="fullLogsBtn">View Full</button></div>
+          <div class="panel-head"><h3 class="panel-title">Recent API Activity</h3><button class="secondary" id="fullLogsBtn">View Full</button></div>
           <div id="latestLogs" class="list"></div>
         </div>
         <div class="card">
-          <div class="panel-head"><h3 class="panel-title">Latest Match Requests</h3><button class="secondary" id="fullRequestsBtn">View Full</button></div>
+          <div class="panel-head"><h3 class="panel-title">Recent Match Requests</h3><button class="secondary" id="fullRequestsBtn">View Full</button></div>
           <div id="latestRequests" class="list"></div>
         </div>
       </div>
 
       <div class="grid2">
         <div class="card">
-          <div class="panel-head"><h3 class="panel-title">Venue Share Ops (Committed Groups)</h3><button class="secondary" id="fullMeetsBtn">View Full</button></div>
+          <div class="panel-head"><h3 class="panel-title">Groups Ready For Venue Share</h3><button class="secondary" id="fullMeetsBtn">View Full</button></div>
           <div id="latestMeets" class="list" style="margin-bottom:10px"></div>
-          <div class="top" style="margin-bottom:8px">
-            <input id="venueGroupId" class="mono" placeholder="group_id" style="flex:1" />
+          <div class="inline" style="margin-bottom:8px">
+            <input id="venueGroupId" class="mono" placeholder="Selected group ID" style="flex:1" />
+            <select id="venueGroupSelect" style="min-width:220px"></select>
+            <button id="applyGroupBtn" class="secondary smallbtn">Use Selected</button>
           </div>
           <div class="grid2" style="margin-bottom:8px">
             <input id="venueName" placeholder="Venue name" />
@@ -3751,12 +3787,12 @@ function renderAdminHtml() {
           </div>
           <textarea id="venueHostReview" placeholder="Review from host"></textarea>
           <div class="top" style="margin-top:8px">
-            <button id="submitVenueBtn">Share Venue To Committed + Notify</button>
+            <button id="submitVenueBtn">Share Venue + Notify Group</button>
             <span id="venueOpsStatus" class="muted"></span>
           </div>
         </div>
         <div class="card">
-          <div class="panel-head"><h3 class="panel-title">Matched Groups</h3><button class="secondary" id="fullGroupsBtn">View Full</button></div>
+          <div class="panel-head"><h3 class="panel-title">All Matched Groups</h3><button class="secondary" id="fullGroupsBtn">View Full</button></div>
           <div id="latestGroups" class="list"></div>
         </div>
       </div>
@@ -3773,7 +3809,7 @@ function renderAdminHtml() {
       </div>
 
       <div class="card">
-        <div class="panel-head"><h3 class="panel-title">API Test Console</h3></div>
+        <div class="panel-head"><h3 class="panel-title">Advanced API Console (Optional)</h3></div>
         <div class="api-grid">
           <div>
             <div class="top" style="margin-bottom:8px">
@@ -3808,6 +3844,7 @@ function renderAdminHtml() {
     const metricsEl = document.getElementById('metrics');
     const issueSummaryEl = document.getElementById('issueSummaryTable');
     const dbStatusEl = document.getElementById('dbStatusTable');
+    const runtimeStatusEl = document.getElementById('runtimeStatusTable');
     const latestUsersEl = document.getElementById('latestUsers');
     const latestFailuresEl = document.getElementById('latestFailures');
     const latestLogsEl = document.getElementById('latestLogs');
@@ -3825,6 +3862,7 @@ function renderAdminHtml() {
     const apiBodyEl = document.getElementById('apiBody');
     const apiTestStatusEl = document.getElementById('apiTestStatus');
     const apiTestOutputEl = document.getElementById('apiTestOutput');
+    const venueGroupSelectEl = document.getElementById('venueGroupSelect');
     const state = { overview: null, db: null, matcher: null, meets: null, groups: null, failed: [] };
 
     function fmt(v){ return v == null ? '-' : String(v); }
@@ -3897,6 +3935,10 @@ function renderAdminHtml() {
       const groupId = document.getElementById('venueGroupId').value.trim();
       if (!key) { venueOpsStatusEl.textContent = 'Enter admin key'; return; }
       if (!groupId) { venueOpsStatusEl.textContent = 'Enter group_id'; return; }
+      if (!document.getElementById('venueName').value.trim() || !document.getElementById('venueAddress').value.trim()) {
+        venueOpsStatusEl.textContent = 'Venue name + address are required';
+        return;
+      }
       venueOpsStatusEl.textContent = 'Saving...';
       try {
         const body = {
@@ -3943,6 +3985,18 @@ function renderAdminHtml() {
         '<tr><td>Provider</td><td>'+ fmt(db.details?.provider) +'</td></tr>' +
         '<tr><td>DATABASE_URL</td><td>'+ (db.database_url_configured ? 'Configured' : 'Missing') +'</td></tr>';
 
+      const runtime = d.runtime || null;
+      runtimeStatusEl.innerHTML = '<tr><th>Check</th><th>Status</th></tr>';
+      runtimeStatusEl.innerHTML += '<tr><td>Database Healthy</td><td class="' + (db.healthy ? 'ok' : 'bad') + '">' + (db.healthy ? 'OK' : 'Issue') + '</td></tr>';
+      if (runtime) {
+        runtimeStatusEl.innerHTML += '<tr><td>Auth Mode</td><td>' + escapeHtml(runtime.auth_mode || '-') + '</td></tr>';
+        runtimeStatusEl.innerHTML += '<tr><td>OTP Fallback</td><td class="' + (runtime.allow_otp_fallback ? 'bad' : 'ok') + '">' + (runtime.allow_otp_fallback ? 'ON (Disable for pilot)' : 'OFF') + '</td></tr>';
+        runtimeStatusEl.innerHTML += '<tr><td>Dev Instant Match</td><td class="' + (runtime.dev_match_helpers_enabled ? 'bad' : 'ok') + '">' + (runtime.dev_match_helpers_enabled ? 'ON (Disable for pilot)' : 'OFF') + '</td></tr>';
+        runtimeStatusEl.innerHTML += '<tr><td>Admin Seed Endpoint</td><td class="' + (runtime.admin_matcher_seed_enabled ? 'bad' : 'ok') + '">' + (runtime.admin_matcher_seed_enabled ? 'ON (Disable for pilot)' : 'OFF') + '</td></tr>';
+      } else {
+        runtimeStatusEl.innerHTML += '<tr><td colspan="2" class="warn">Runtime flags not exposed in this deploy. Use pilot cloud-safe test script.</td></tr>';
+      }
+
       const users = d.users || [];
       renderList(latestUsersEl, users.slice(0,5).map(u => ({
         left: '<span class="mono">'+ escapeHtml(u.user_id) +'</span> • '+ escapeHtml(u.phone || '-') + '<div class="muted">Vibe: ' + escapeHtml(u.latest_preference?.vibe || '-') + ' • Slot: ' + escapeHtml(u.latest_preference?.availability_slot || '-') + '</div>',
@@ -3970,8 +4024,11 @@ function renderAdminHtml() {
       const groupsForVenue = (state.groups?.groups || []).filter(g => Number(g.committed_count || 0) > 0);
       renderList(latestMeetsEl, groupsForVenue.slice(0,5).map(g => ({
         left: '<span class="mono">'+ escapeHtml(g.group_id || '-') +'</span><div class="muted">' + escapeHtml((g.vibe || '-') + ' • ' + (g.availability_slot || '-') + ' • committed: ' + String(g.committed_count || 0)) + '</div>',
-        right: '<span class="pill">'+ escapeHtml(String(g.member_count || 0)) +' members</span>'
+        right: '<div class="inline"><span class="pill">'+ escapeHtml(String(g.member_count || 0)) +' members</span><button class="secondary smallbtn use-group-btn" data-group-id="' + escapeHtml(g.group_id || '') + '">Use</button></div>'
       })), 'No committed groups yet');
+
+      const options = groupsForVenue.map(g => '<option value="' + escapeHtml(g.group_id || '') + '">' + escapeHtml((g.group_id || '') + ' • ' + (g.vibe || '-') + ' • committed ' + String(g.committed_count || 0)) + '</option>');
+      venueGroupSelectEl.innerHTML = '<option value="">Select committed group</option>' + options.join('');
 
       const groups = state.groups?.groups || [];
       renderList(latestGroupsEl, groups.slice(0,5).map(g => ({
@@ -4019,6 +4076,13 @@ function renderAdminHtml() {
         statusEl.textContent = 'Loaded';
       } catch (e) {
         statusEl.textContent = String(e?.message || e);
+      }
+    }
+
+    function applySelectedGroup(){
+      const selected = venueGroupSelectEl.value.trim();
+      if (selected) {
+        document.getElementById('venueGroupId').value = selected;
       }
     }
 
@@ -4114,6 +4178,15 @@ function renderAdminHtml() {
     failedFilterEl.addEventListener('change', renderDashboard);
     document.getElementById('runApiTestBtn').addEventListener('click', runApiTest);
     document.getElementById('submitVenueBtn').addEventListener('click', submitVenueUpdate);
+    document.getElementById('applyGroupBtn').addEventListener('click', applySelectedGroup);
+    latestMeetsEl.addEventListener('click', (event) => {
+      const btn = event.target.closest('.use-group-btn');
+      if (!btn) return;
+      const id = String(btn.getAttribute('data-group-id') || '').trim();
+      if (!id) return;
+      document.getElementById('venueGroupId').value = id;
+      venueOpsStatusEl.textContent = 'Group selected';
+    });
     wireFullButtons();
   </script>
 </body>
