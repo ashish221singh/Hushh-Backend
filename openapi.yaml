@@ -1,0 +1,1757 @@
+openapi: 3.0.3
+info:
+  title: Hushh Backend API
+  version: 1.0.0
+  description: |
+    Locked API contract for Hushh MVP backend.
+    All responses are wrapped in success/data or success/error envelopes.
+  contact:
+    name: Hushh Engineering
+servers:
+  - url: http://localhost:3001
+    description: Local
+  - url: http://{host}
+    description: LAN / custom host
+    variables:
+      host:
+        default: localhost:3001
+tags:
+  - name: Health
+  - name: Auth
+  - name: Onboarding
+  - name: Match Requests
+  - name: Meets
+  - name: Payments
+  - name: Users
+  - name: Voice
+  - name: Admin
+  - name: Dev
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      operationId: getHealth
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/v1/auth/sim/request:
+    post:
+      tags: [Auth]
+      summary: Request SIM verification
+      operationId: postSimRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimRequestCreate'
+      responses:
+        '201':
+          description: Verification request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimRequestCreateResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/v1/auth/sim/status:
+    get:
+      tags: [Auth]
+      summary: Check SIM verification status
+      operationId: getSimStatus
+      parameters:
+        - in: query
+          name: request_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Status response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/auth/sim/inbound-sms:
+    post:
+      tags: [Auth]
+      summary: Process inbound SMS webhook
+      operationId: postInboundSms
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InboundSmsBody'
+      responses:
+        '200':
+          description: Processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/auth/sim/provider-webhook:
+    post:
+      tags: [Auth]
+      summary: Alias for provider inbound webhook
+      operationId: postProviderWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnyObject'
+      responses:
+        '200':
+          description: Processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/auth/sim/mock-verify:
+    post:
+      tags: [Auth]
+      summary: Mock verify SIM request (dev)
+      operationId: postSimMockVerify
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request_id]
+              properties:
+                request_id:
+                  type: string
+      responses:
+        '200':
+          description: Verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/auth/token:
+    post:
+      tags: [Auth]
+      summary: Exchange verified SIM request for access token
+      operationId: postAuthToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request_id]
+              properties:
+                request_id:
+                  type: string
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+
+  /api/v1/auth/otp/request:
+    post:
+      tags: [Auth]
+      summary: Request OTP challenge
+      operationId: postOtpRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimRequestCreate'
+      responses:
+        '201':
+          description: OTP request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/auth/otp/verify:
+    post:
+      tags: [Auth]
+      summary: Verify OTP and issue access token
+      operationId: postOtpVerify
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request_id, otp]
+              properties:
+                request_id:
+                  type: string
+                otp:
+                  type: string
+                  minLength: 6
+                  maxLength: 6
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+
+  /api/v1/auth/firebase/token:
+    post:
+      tags: [Auth]
+      summary: Exchange Firebase user id token for backend access token
+      operationId: postFirebaseToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_token]
+              properties:
+                id_token:
+                  type: string
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout current session
+      operationId: postAuthLogout
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user
+      operationId: getAuthMe
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/notifications/push-token:
+    post:
+      tags: [Notifications]
+      summary: Register Expo push token for current user
+      operationId: postPushToken
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [push_token]
+              properties:
+                push_token:
+                  type: string
+                platform:
+                  type: string
+      responses:
+        '200':
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags: [Notifications]
+      summary: Deactivate Expo push token for current user
+      operationId: deletePushToken
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [push_token]
+              properties:
+                push_token:
+                  type: string
+      responses:
+        '200':
+          description: Deactivated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/onboarding/profile:
+    post:
+      tags: [Onboarding]
+      summary: Save onboarding profile
+      operationId: postOnboardingProfile
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileBody'
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+
+  /api/v1/voice-intros:
+    post:
+      tags: [Voice]
+      summary: Persist voice intro metadata
+      operationId: postVoiceIntro
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoiceIntroBody'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoiceIntroResponse'
+
+  /api/v1/match-requests:
+    post:
+      tags: [Match Requests]
+      summary: Create or requeue a match request
+      operationId: postMatchRequest
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchRequestBody'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchRequestResponse'
+        '200':
+          description: Existing/reused response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchRequestResponse'
+
+  /api/v1/match-requests/active:
+    get:
+      tags: [Match Requests]
+      summary: Get latest active match request
+      operationId: getActiveMatchRequest
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Match request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchRequestResponse'
+
+  /api/v1/match-requests/cancel-active:
+    post:
+      tags: [Match Requests]
+      summary: Cancel active queued match request
+      operationId: postCancelActiveMatchRequest
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/match-requests/{request_id}/cancel:
+    post:
+      tags: [Match Requests]
+      summary: Cancel a specific match request
+      operationId: postCancelMatchRequestById
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: request_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchRequestResponse'
+
+  /api/v1/meets/open:
+    get:
+      tags: [Meets]
+      summary: List open meets for current user
+      operationId: getOpenMeets
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Open meets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenMeetsResponse'
+
+  /api/v1/meets/past:
+    get:
+      tags: [Meets]
+      summary: Get past meets for current user
+      operationId: getPastMeets
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Past meets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenMeetsResponse'
+
+  /api/v1/meets/found:
+    get:
+      tags: [Meets]
+      summary: Get found meet
+      operationId: getFoundMeet
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Found meet or null in strict mode
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FoundMeetResponse'
+
+  /api/v1/meets/active:
+    get:
+      tags: [Meets]
+      summary: Get active confirmed/shared meet
+      operationId: getActiveMeet
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Active meet or null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FoundMeetResponse'
+
+  /api/v1/meets/{meet_id}/payment-intent:
+    post:
+      tags: [Payments]
+      summary: Create payment intent for meet
+      operationId: postMeetPaymentIntent
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: meet_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        '200':
+          description: Payment intent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentIntentResponse'
+
+  /api/v1/meets/{meet_id}/confirm:
+    post:
+      tags: [Meets]
+      summary: Confirm meet commitment
+      operationId: postMeetConfirm
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: meet_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FoundMeetResponse'
+
+  /api/v1/meets/{meet_id}/share-venue:
+    post:
+      tags: [Meets]
+      summary: Share venue for meet
+      operationId: postMeetShareVenue
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: meet_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Venue shared
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FoundMeetResponse'
+
+  /api/v1/meets/{meet_id}/feedback:
+    post:
+      tags: [Meets]
+      summary: Submit meet feedback
+      operationId: postMeetFeedback
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: meet_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackBody'
+      responses:
+        '201':
+          description: Feedback created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/payments/callback:
+    post:
+      tags: [Payments]
+      summary: Payment callback from app/backend
+      operationId: postPaymentCallback
+      security:
+        - BearerAuth: []
+        - AdminKeyAuth: []
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentCallbackBody'
+      responses:
+        '200':
+          description: Payment updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentUpdateResponse'
+
+  /api/v1/payments/webhook:
+    post:
+      tags: [Payments]
+      summary: Payment provider webhook
+      operationId: postPaymentWebhook
+      parameters:
+        - in: header
+          name: x-payment-signature
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Payment updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentUpdateResponse'
+
+  /api/v1/users/block:
+    post:
+      tags: [Users]
+      summary: Block user
+      operationId: postUserBlock
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BlockBody'
+      responses:
+        '201':
+          description: Blocked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/users/unblock:
+    post:
+      tags: [Users]
+      summary: Unblock user
+      operationId: postUserUnblock
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [blocked_user_id]
+              properties:
+                blocked_user_id:
+                  type: string
+      responses:
+        '200':
+          description: Unblocked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/admin/overview:
+    get:
+      tags: [Admin]
+      summary: Admin overview metrics
+      operationId: getAdminOverview
+      security:
+        - AdminKeyAuth: []
+      responses:
+        '200':
+          description: Overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/admin/users:
+    get:
+      tags: [Admin]
+      summary: Admin users snapshot
+      operationId: getAdminUsers
+      security:
+        - AdminKeyAuth: []
+      responses:
+        '200':
+          description: Users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/admin/logs:
+    get:
+      tags: [Admin]
+      summary: Admin request logs
+      operationId: getAdminLogs
+      security:
+        - AdminKeyAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+      responses:
+        '200':
+          description: Logs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/admin/db-status:
+    get:
+      tags: [Admin]
+      summary: Admin DB status
+      operationId: getAdminDbStatus
+      security:
+        - AdminKeyAuth: []
+      responses:
+        '200':
+          description: DB status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/admin/match-queue:
+    get:
+      tags: [Admin]
+      summary: Admin match queue diagnostics
+      operationId: getAdminMatchQueue
+      security:
+        - AdminKeyAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Match queue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/admin/meets:
+    get:
+      tags: [Admin]
+      summary: Admin open/all meets with owner and venue metadata
+      operationId: getAdminMeets
+      security:
+        - AdminKeyAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [open, all, needs_venue]
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: Meets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/admin/match-groups:
+    get:
+      tags: [Admin]
+      summary: Admin matched groups with members and preference snapshots
+      operationId: getAdminMatchGroups
+      security:
+        - AdminKeyAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+        - in: query
+          name: committed_only
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Groups
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/admin/match-groups/{group_id}/share-venue:
+    post:
+      tags: [Admin]
+      summary: Share venue to all committed members of a matched group and trigger push
+      operationId: postAdminMatchGroupShareVenue
+      security:
+        - AdminKeyAuth: []
+      parameters:
+        - in: path
+          name: group_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [venue_name, venue_address, manager_name, venue_phone]
+              properties:
+                venue_name:
+                  type: string
+                venue_address:
+                  type: string
+                manager_name:
+                  type: string
+                venue_phone:
+                  type: string
+                host_review:
+                  type: string
+                  nullable: true
+                venue_lat:
+                  type: number
+                  nullable: true
+                venue_lng:
+                  type: number
+                  nullable: true
+                share_eta_mins:
+                  type: integer
+                  nullable: true
+      responses:
+        '200':
+          description: Venue shared
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/admin/meets/{meet_id}/venue:
+    post:
+      tags: [Admin]
+      summary: Update venue/host details for meet and trigger venue push
+      operationId: postAdminMeetVenue
+      security:
+        - AdminKeyAuth: []
+      parameters:
+        - in: path
+          name: meet_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [venue_name, venue_address, manager_name, venue_phone]
+              properties:
+                venue_name:
+                  type: string
+                venue_address:
+                  type: string
+                manager_name:
+                  type: string
+                venue_phone:
+                  type: string
+                host_review:
+                  type: string
+                  nullable: true
+                venue_lat:
+                  type: number
+                  nullable: true
+                venue_lng:
+                  type: number
+                  nullable: true
+                share_eta_mins:
+                  type: integer
+                  nullable: true
+      responses:
+        '200':
+          description: Venue updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeetEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/admin/matcher/seed-demo-group:
+    post:
+      tags: [Admin]
+      summary: Seed demo match group for testing
+      operationId: postAdminSeedDemoGroup
+      security:
+        - AdminKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                anchor_user_id:
+                  type: string
+                  nullable: true
+                vibe:
+                  type: string
+                availability_slot:
+                  type: string
+                  enum: [Today, Tomorrow, This Weekend]
+                availability_date:
+                  type: string
+                  nullable: true
+                lat:
+                  type: number
+                lng:
+                  type: number
+      responses:
+        '200':
+          description: Seed result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+  /api/v1/dev/matcher/seed-self:
+    post:
+      tags: [Dev]
+      summary: Seed current user into instant test group
+      operationId: postDevSeedSelf
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                vibe:
+                  type: string
+                availability_slot:
+                  type: string
+                  enum: [Today, Tomorrow, This Weekend]
+                availability_date:
+                  type: string
+                  nullable: true
+                lat:
+                  type: number
+                lng:
+                  type: number
+      responses:
+        '200':
+          description: Seed result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelopeAny'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-token
+    AdminKeyAuth:
+      type: apiKey
+      in: header
+      name: x-admin-key
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+  schemas:
+    AnyObject:
+      type: object
+      additionalProperties: true
+
+    SuccessEnvelopeAny:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          additionalProperties: true
+
+    ErrorEnvelope:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable machine-readable error code
+            message:
+              type: string
+              description: Human-readable message
+
+    HealthResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          required: [status, service, time]
+          properties:
+            status:
+              type: string
+              enum: [ok]
+            service:
+              type: string
+            time:
+              type: string
+              format: date-time
+
+    SimRequestCreate:
+      type: object
+      required: [country_code, phone]
+      properties:
+        country_code:
+          type: string
+          example: '+91'
+        phone:
+          type: string
+          example: '9900000001'
+
+    SimRequestCreateResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          required: [request_id, expires_at, sms_destination, sms_body, status_check_url]
+          properties:
+            request_id:
+              type: string
+            expires_at:
+              type: string
+              format: date-time
+            sms_destination:
+              type: string
+            sms_body:
+              type: string
+            provider:
+              type: string
+            provider_meta:
+              type: object
+              additionalProperties: true
+            status_check_url:
+              type: string
+
+    SimStatusResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          required: [request_id, status, expires_at]
+          properties:
+            request_id:
+              type: string
+            status:
+              type: string
+              enum: [PENDING, VERIFIED, EXPIRED]
+            verified_at:
+              type: string
+              nullable: true
+              format: date-time
+            expires_at:
+              type: string
+              format: date-time
+
+    InboundSmsBody:
+      type: object
+      properties:
+        from:
+          type: string
+        message:
+          type: string
+      additionalProperties: true
+
+    AuthTokenResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          required: [access_token, token_type, expires_at, user_id]
+          properties:
+            access_token:
+              type: string
+            token_type:
+              type: string
+              enum: [Bearer]
+            expires_at:
+              type: string
+              format: date-time
+            user_id:
+              type: string
+
+    ProfileBody:
+      type: object
+      required: [full_name, gender, age, profession]
+      properties:
+        full_name:
+          type: string
+        gender:
+          type: string
+          enum: [Male, Female, Other]
+        age:
+          type: integer
+          minimum: 18
+          maximum: 99
+        profession:
+          type: string
+
+    AuthMeResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          required: [user_id]
+          properties:
+            user_id:
+              type: string
+            phone:
+              type: string
+            country_code:
+              type: string
+            profile:
+              $ref: '#/components/schemas/ProfilePublic'
+
+    ProfilePublic:
+      type: object
+      nullable: true
+      properties:
+        full_name:
+          type: string
+        gender:
+          type: string
+        age:
+          type: integer
+        profession:
+          type: string
+        onboarding_completed:
+          type: boolean
+
+    VoiceIntroBody:
+      type: object
+      required: [voice_duration_sec]
+      properties:
+        voice_duration_sec:
+          type: integer
+          minimum: 15
+        local_uri:
+          type: string
+          nullable: true
+        mime_type:
+          type: string
+        size_bytes:
+          type: integer
+          nullable: true
+        recorded_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    VoiceIntroResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          properties:
+            voice_intro:
+              type: object
+              properties:
+                voice_intro_id:
+                  type: string
+                storage_url:
+                  type: string
+                duration_sec:
+                  type: integer
+                mime_type:
+                  type: string
+                size_bytes:
+                  type: integer
+                  nullable: true
+                recorded_at:
+                  type: string
+                  format: date-time
+
+    MatchRequestBody:
+      type: object
+      required: [availability_slot, vibe, age_min, age_max, voice_duration_sec, voice_storage_url]
+      properties:
+        requeue:
+          type: boolean
+        look_for_another:
+          type: boolean
+        skip_create:
+          type: boolean
+        availability_slot:
+          type: string
+          enum: [Today, Tomorrow, This Weekend]
+        availability_date:
+          type: string
+          format: date
+          nullable: true
+        vibe:
+          type: string
+        age_min:
+          type: integer
+        age_max:
+          type: integer
+        lat:
+          type: number
+          nullable: true
+        lng:
+          type: number
+          nullable: true
+        radius_km:
+          type: number
+        voice_duration_sec:
+          type: integer
+          minimum: 15
+        voice_intro_id:
+          type: string
+          nullable: true
+        voice_storage_url:
+          type: string
+        voice_mime_type:
+          type: string
+          nullable: true
+        voice_size_bytes:
+          type: integer
+          nullable: true
+        voice_recorded_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    MatchRequestResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          properties:
+            request:
+              $ref: '#/components/schemas/MatchRequest'
+            meta:
+              type: object
+              additionalProperties: true
+
+    MatchRequest:
+      type: object
+      nullable: true
+      properties:
+        request_id:
+          type: string
+        status:
+          type: string
+          enum: [QUEUED, MATCHED, CANCELLED, EXPIRED]
+        sla_state:
+          type: string
+        matching_mode:
+          type: string
+          nullable: true
+        score:
+          type: number
+          nullable: true
+        matched_group_id:
+          type: string
+          nullable: true
+        availability_date:
+          type: string
+          format: date
+          nullable: true
+        availability_slot:
+          type: string
+          nullable: true
+        vibe:
+          type: string
+          nullable: true
+        age_min:
+          type: integer
+          nullable: true
+        age_max:
+          type: integer
+          nullable: true
+        lat:
+          type: number
+          nullable: true
+        lng:
+          type: number
+          nullable: true
+        radius_km:
+          type: number
+          nullable: true
+        voice_duration_sec:
+          type: integer
+          nullable: true
+        voice_intro_id:
+          type: string
+          nullable: true
+        voice_storage_url:
+          type: string
+          nullable: true
+        voice_mime_type:
+          type: string
+          nullable: true
+        voice_size_bytes:
+          type: integer
+          nullable: true
+        voice_recorded_at:
+          type: string
+          format: date-time
+          nullable: true
+        members:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    FoundMeetResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          properties:
+            meet:
+              $ref: '#/components/schemas/Meet'
+            meta:
+              type: object
+              additionalProperties: true
+
+    OpenMeetsResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          required: [meets]
+          properties:
+            meets:
+              type: array
+              items:
+                $ref: '#/components/schemas/Meet'
+
+    MeetEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          properties:
+            meet:
+              $ref: '#/components/schemas/Meet'
+
+    Meet:
+      type: object
+      nullable: true
+      properties:
+        meet_id:
+          type: string
+        status:
+          type: string
+          enum: [FOUND, CONFIRMED, VENUE_SHARED, ARCHIVED]
+        topic_label:
+          type: string
+        match_time_label:
+          type: string
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/Participant'
+        venue:
+          type: object
+          properties:
+            is_hidden:
+              type: boolean
+            share_eta_mins:
+              type: integer
+              nullable: true
+            name:
+              type: string
+              nullable: true
+            address:
+              type: string
+              nullable: true
+            lat:
+              type: number
+              nullable: true
+            lng:
+              type: number
+              nullable: true
+            manager_name:
+              type: string
+              nullable: true
+            phone:
+              type: string
+              nullable: true
+        host_review:
+          type: string
+          nullable: true
+        fee:
+          type: object
+          properties:
+            amount:
+              type: string
+            amount_paise:
+              type: integer
+            currency:
+              type: string
+            payment_status:
+              type: string
+            receipt:
+              type: object
+              nullable: true
+              additionalProperties: true
+        commitment:
+          type: object
+          properties:
+            response_window_mins:
+              type: integer
+            deadline_at:
+              type: string
+              format: date-time
+            is_expired:
+              type: boolean
+            total_members:
+              type: integer
+            committed_members:
+              type: integer
+            pending_members:
+              type: integer
+            cancelled_members:
+              type: integer
+        updated_at:
+          type: string
+          format: date-time
+
+    Participant:
+      type: object
+      properties:
+        participant_id:
+          type: string
+        user_id:
+          type: string
+          nullable: true
+        name:
+          type: string
+        subtitle:
+          type: string
+        initial:
+          type: string
+        status:
+          type: string
+          enum: [COMMITTED, PENDING, CANCELLED]
+        is_owner:
+          type: boolean
+
+    PaymentIntentResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          properties:
+            provider:
+              type: string
+            provider_meta:
+              type: object
+              additionalProperties: true
+            payment:
+              $ref: '#/components/schemas/Payment'
+            meet:
+              $ref: '#/components/schemas/Meet'
+            client_action:
+              type: object
+              additionalProperties: true
+
+    PaymentUpdateResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        data:
+          type: object
+          properties:
+            payment:
+              $ref: '#/components/schemas/Payment'
+            meet:
+              $ref: '#/components/schemas/Meet'
+
+    Payment:
+      type: object
+      nullable: true
+      properties:
+        payment_id:
+          type: string
+        meet_id:
+          type: string
+        user_id:
+          type: string
+        amount_paise:
+          type: integer
+        amount:
+          type: string
+        currency:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, FAILED, CANCELLED, REFUNDED]
+        receipt_id:
+          type: string
+          nullable: true
+        confirmed_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+
+    PaymentCallbackBody:
+      type: object
+      required: [status]
+      properties:
+        payment_id:
+          type: string
+          nullable: true
+        meet_id:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, FAILED, CANCELLED, REFUNDED]
+        receipt_id:
+          type: string
+          nullable: true
+
+    FeedbackBody:
+      type: object
+      required: [rating]
+      properties:
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        note:
+          type: string
+          nullable: true
+
+    BlockBody:
+      type: object
+      required: [blocked_user_id]
+      properties:
+        blocked_user_id:
+          type: string
+        reason:
+          type: string
+          nullable: true

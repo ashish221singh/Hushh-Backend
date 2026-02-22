@@ -1,0 +1,31 @@
+{
+  "name": "hushh-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:push": "prisma db push",
+    "db:generate": "prisma generate",
+    "db:studio": "prisma studio",
+    "setup:local-db": "bash scripts/setup-local-db.sh",
+    "smoke:test": "ADMIN_MATCHER_SEED_ENABLED=true node scripts/smoke-test.js",
+    "matching-policy:test": "ADMIN_MATCHER_SEED_ENABLED=true node scripts/matching-policy-test.js",
+    "past-meets:test": "ADMIN_MATCHER_SEED_ENABLED=true node scripts/past-meets-test.js",
+    "auth-hardening:test": "node scripts/auth-hardening-test.js",
+    "readiness:test": "ADMIN_MATCHER_SEED_ENABLED=true node scripts/readiness-idempotency-test.js",
+    "openapi:check": "node scripts/openapi-check.js",
+    "pilot:qa": "npm run smoke:test && npm run matching-policy:test && npm run past-meets:test && npm run readiness:test && npm run auth-hardening:test && npm run openapi:check",
+    "pilot:config-check": "bash scripts/pilot-config-check.sh",
+    "pilot:health-check": "bash scripts/pilot-health-check.sh"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.3.1"
+  },
+  "devDependencies": {
+    "prisma": "^6.3.1"
+  }
+}

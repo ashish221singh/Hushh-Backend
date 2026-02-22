@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hushh-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: hushh
+      POSTGRES_PASSWORD: hushh
+      POSTGRES_DB: hushh
+    volumes:
+      - hushh_pg_data:/var/lib/postgresql/data
+
+volumes:
+  hushh_pg_data:
