@@ -93,6 +93,7 @@ const rateLimitBuckets = new Map();
 const idempotencyBuckets = new Map();
 const pushDispatchInFlight = new Set();
 const venuePushDispatchInFlight = new Set();
+const lifecyclePushDispatchInFlight = new Set();
 
 function cleanupExpiredIdempotencyEntries() {
   const now = Date.now();
@@ -869,14 +870,21 @@ function syncGroupMeetCommitmentStates(store, meet) {
   const now = nowIso();
   let transitionedToConfirmed = false;
   let transitionedToCancelled = false;
+  const newlyConfirmedTargets = [];
+  const newlyCancelledTargets = [];
 
   summary.members.forEach((memberState) => {
     if (!memberState.openMeetId) return;
     const next = store.meets?.[memberState.openMeetId];
     if (!next || next.status === 'VENUE_SHARED') return;
     if (shouldCancel) {
-      if (String(next.status || '').toUpperCase() !== 'CANCELLED') {
+      const priorStatus = String(next.status || '').toUpperCase();
+      if (priorStatus !== 'CANCELLED') {
         transitionedToCancelled = true;
+        newlyCancelledTargets.push({
+          user_id: memberState.userId,
+          meet_id: memberState.openMeetId,
+        });
       }
       next.status = 'CANCELLED';
       next.venueHidden = true;
@@ -896,8 +904,13 @@ function syncGroupMeetCommitmentStates(store, meet) {
         next.paymentStatus = payment.status;
       }
     } else if (shouldConfirm && memberState.committedState) {
-      if (String(next.status || '').toUpperCase() !== 'CONFIRMED') {
+      const priorStatus = String(next.status || '').toUpperCase();
+      if (priorStatus !== 'CONFIRMED') {
         transitionedToConfirmed = true;
+        newlyConfirmedTargets.push({
+          user_id: memberState.userId,
+          meet_id: memberState.openMeetId,
+        });
       }
       next.status = 'CONFIRMED';
     } else {
@@ -944,10 +957,14 @@ function syncGroupMeetCommitmentStates(store, meet) {
     min_committed_to_confirm: MEET_MIN_COMMITTED_TO_CONFIRM,
     confirmed: shouldConfirm,
     cancelled: shouldCancel,
+    newly_confirmed_targets: newlyConfirmedTargets,
+    newly_cancelled_targets: newlyCancelledTargets,
   };
 }
 
 function reconcileAllGroupMeetStates() {
+  const confirmedPushQueue = [];
+  const cancelledPushQueue = [];
   mutateStore((draft) => {
     const processedGroups = new Set();
     const candidateMeets = Object.values(draft.meets || {}).filter((m) =>
@@ -957,8 +974,29 @@ function reconcileAllGroupMeetStates() {
       const groupId = findGroupIdForMeet(draft, meet);
       if (!groupId || processedGroups.has(groupId)) return;
       processedGroups.add(groupId);
-      syncGroupMeetCommitmentStates(draft, meet);
+      const summary = syncGroupMeetCommitmentStates(draft, meet);
+      (summary?.newly_confirmed_targets || []).forEach((item) => {
+        confirmedPushQueue.push(item);
+      });
+      (summary?.newly_cancelled_targets || []).forEach((item) => {
+        cancelledPushQueue.push(item);
+      });
     });
+  });
+  const dedupe = (items) => {
+    const seen = new Set();
+    return items.filter((item) => {
+      const key = `${item.user_id}:${item.meet_id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  dedupe(confirmedPushQueue).forEach((item) => {
+    void sendMeetLifecyclePushForMeet(item.user_id, item.meet_id, 'MEET_CONFIRMED');
+  });
+  dedupe(cancelledPushQueue).forEach((item) => {
+    void sendMeetLifecyclePushForMeet(item.user_id, item.meet_id, 'MEET_CANCELLED');
   });
 }
 
@@ -1526,6 +1564,9 @@ function ensureFoundMeetForUser(draft, userId, requests, groupScoreValue) {
     paymentStatus: 'PENDING',
     paymentId: null,
     matchFoundPushSentAt: null,
+    venueSharedPushSentAt: null,
+    confirmedPushSentAt: null,
+    cancelledPushSentAt: null,
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -1581,6 +1622,12 @@ async function sendPushNotification(payloads) {
   return { ok: true, data: Array.isArray(json?.data) ? json.data : [] };
 }
 
+function getActiveExpoPushTokensForUser(store, userId) {
+  return Object.values(store.pushTokens || {})
+    .filter((t) => t.userId === userId && t.status === 'ACTIVE' && isExpoPushToken(t.pushToken))
+    .map((t) => ({ pushTokenId: t.pushTokenId, token: t.pushToken }));
+}
+
 async function sendMatchFoundPushForMeet(userId, meetId) {
   if (!meetId || pushDispatchInFlight.has(meetId)) return;
   pushDispatchInFlight.add(meetId);
@@ -1591,9 +1638,7 @@ async function sendMatchFoundPushForMeet(userId, meetId) {
     return;
   }
 
-  const tokens = Object.values(store.pushTokens || {})
-    .filter((t) => t.userId === userId && t.status === 'ACTIVE' && isExpoPushToken(t.pushToken))
-    .map((t) => ({ pushTokenId: t.pushTokenId, token: t.pushToken }));
+  const tokens = getActiveExpoPushTokensForUser(store, userId);
   if (!tokens.length) {
     pushDispatchInFlight.delete(meetId);
     return;
@@ -1660,14 +1705,12 @@ async function sendVenueSharedPushForMeet(userId, meetId) {
   venuePushDispatchInFlight.add(meetId);
   const store = getStore();
   const meet = store.meets?.[meetId];
-  if (!meet) {
+  if (!meet || meet.venueSharedPushSentAt) {
     venuePushDispatchInFlight.delete(meetId);
     return;
   }
 
-  const tokens = Object.values(store.pushTokens || {})
-    .filter((t) => t.userId === userId && t.status === 'ACTIVE' && isExpoPushToken(t.pushToken))
-    .map((t) => ({ pushTokenId: t.pushTokenId, token: t.pushToken }));
+  const tokens = getActiveExpoPushTokensForUser(store, userId);
   if (!tokens.length) {
     venuePushDispatchInFlight.delete(meetId);
     return;
@@ -1689,8 +1732,13 @@ async function sendVenueSharedPushForMeet(userId, meetId) {
   try {
     const result = await sendPushNotification(messages);
     mutateStore((draft) => {
+      const nextMeet = draft.meets?.[meetId];
       const itemResults = Array.isArray(result?.data) ? result.data : [];
       const successfulCount = itemResults.filter((item) => item?.status === 'ok').length;
+      if (nextMeet && successfulCount > 0) {
+        nextMeet.venueSharedPushSentAt = nowIso();
+        nextMeet.updatedAt = nowIso();
+      }
       addMatchEvent(draft, {
         requestId: null,
         groupId: null,
@@ -1722,6 +1770,90 @@ async function sendVenueSharedPushForMeet(userId, meetId) {
     });
   } finally {
     venuePushDispatchInFlight.delete(meetId);
+  }
+}
+
+async function sendMeetLifecyclePushForMeet(userId, meetId, category) {
+  const normalizedCategory = String(category || '').toUpperCase();
+  if (!['MEET_CONFIRMED', 'MEET_CANCELLED'].includes(normalizedCategory)) return;
+  const dispatchKey = `${normalizedCategory}:${meetId}`;
+  if (!meetId || lifecyclePushDispatchInFlight.has(dispatchKey)) return;
+  lifecyclePushDispatchInFlight.add(dispatchKey);
+
+  const sentAtField =
+    normalizedCategory === 'MEET_CONFIRMED' ? 'confirmedPushSentAt' : 'cancelledPushSentAt';
+  const title = normalizedCategory === 'MEET_CONFIRMED' ? 'Meet confirmed' : 'Meet cancelled';
+  const body =
+    normalizedCategory === 'MEET_CONFIRMED'
+      ? 'Your group is confirmed. Venue will be shared soon.'
+      : 'This meet was cancelled due to insufficient members. Refund is initiated if applicable.';
+  const route = normalizedCategory === 'MEET_CONFIRMED' ? 'meetDetails' : 'cancelledMeets';
+
+  const store = getStore();
+  const meet = store.meets?.[meetId];
+  if (!meet || meet[sentAtField]) {
+    lifecyclePushDispatchInFlight.delete(dispatchKey);
+    return;
+  }
+
+  const tokens = getActiveExpoPushTokensForUser(store, userId);
+  if (!tokens.length) {
+    lifecyclePushDispatchInFlight.delete(dispatchKey);
+    return;
+  }
+
+  const messages = tokens.map((entry) => ({
+    to: entry.token,
+    sound: 'default',
+    title,
+    body,
+    data: {
+      type: normalizedCategory,
+      route,
+      meet_id: meetId,
+    },
+  }));
+
+  try {
+    const result = await sendPushNotification(messages);
+    mutateStore((draft) => {
+      const nextMeet = draft.meets?.[meetId];
+      const itemResults = Array.isArray(result?.data) ? result.data : [];
+      const successfulCount = itemResults.filter((item) => item?.status === 'ok').length;
+      if (nextMeet && successfulCount > 0) {
+        nextMeet[sentAtField] = nowIso();
+        nextMeet.updatedAt = nowIso();
+      }
+      addMatchEvent(draft, {
+        requestId: null,
+        groupId: null,
+        type: 'PUSH_SENT',
+        message: `${normalizedCategory} push notification sent`,
+        payload: { userId, meetId, count: tokens.length, success_count: successfulCount, category: normalizedCategory },
+      });
+      itemResults.forEach((item, index) => {
+        if (item?.status !== 'error') return;
+        const errCode = String(item?.details?.error || '');
+        if (errCode !== 'DeviceNotRegistered') return;
+        const pushTokenId = tokens[index]?.pushTokenId;
+        if (pushTokenId && draft.pushTokens?.[pushTokenId]) {
+          draft.pushTokens[pushTokenId].status = 'INACTIVE';
+          draft.pushTokens[pushTokenId].updatedAt = nowIso();
+        }
+      });
+    });
+  } catch (error) {
+    mutateStore((draft) => {
+      addMatchEvent(draft, {
+        requestId: null,
+        groupId: null,
+        type: 'PUSH_FAILED',
+        message: String(error?.message || 'Push dispatch failed'),
+        payload: { userId, meetId, count: tokens.length, category: normalizedCategory },
+      });
+    });
+  } finally {
+    lifecyclePushDispatchInFlight.delete(dispatchKey);
   }
 }
 
@@ -2524,6 +2656,24 @@ async function handlePushToken(req, res) {
     if (latestFoundMeet?.meetId) {
       void sendMatchFoundPushForMeet(session.userId, latestFoundMeet.meetId);
     }
+    const latestConfirmedMeet = getUserMeets(session.userId)
+      .filter((meet) => meet.status === 'CONFIRMED' && !meet.confirmedPushSentAt)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    if (latestConfirmedMeet?.meetId) {
+      void sendMeetLifecyclePushForMeet(session.userId, latestConfirmedMeet.meetId, 'MEET_CONFIRMED');
+    }
+    const latestCancelledMeet = getUserMeets(session.userId)
+      .filter((meet) => meet.status === 'CANCELLED' && !meet.cancelledPushSentAt)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    if (latestCancelledMeet?.meetId) {
+      void sendMeetLifecyclePushForMeet(session.userId, latestCancelledMeet.meetId, 'MEET_CANCELLED');
+    }
+    const latestVenueSharedMeet = getUserMeets(session.userId)
+      .filter((meet) => meet.status === 'VENUE_SHARED' && !meet.venueSharedPushSentAt)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    if (latestVenueSharedMeet?.meetId) {
+      void sendVenueSharedPushForMeet(session.userId, latestVenueSharedMeet.meetId);
+    }
 
     return sendJson(res, 200, {
       success: true,
@@ -2658,6 +2808,23 @@ async function handleMeetFound(req, res) {
   if (!session) return;
 
   reconcileAllGroupMeetStates();
+  const latestActiveCommittedMeet = getUserMeets(session.userId).find((meet) =>
+    ['CONFIRMED', 'VENUE_SHARED'].includes(String(meet.status || '').toUpperCase())
+  );
+  if (latestActiveCommittedMeet) {
+    return sendJson(res, 200, {
+      success: true,
+      data: {
+        meet: null,
+        meta: {
+          strict_match_mode: true,
+          active_request_status: null,
+          message: 'You already have a committed meet. Start a new search only when you choose to look for another.',
+        },
+      },
+    });
+  }
+
   let foundMeet = getUserMeets(session.userId).find((meet) => meet.status === 'FOUND');
   if (foundMeet?.meetId && !foundMeet?.commitmentDeadlineAt) {
     mutateStore((draft) => {
