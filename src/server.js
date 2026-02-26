@@ -1049,6 +1049,42 @@ function getOpenMeetForUserAndGroup(store, userId, groupId, options = {}) {
   );
 }
 
+function getContextMeetForGroupMember(store, member, groupId, anchorMeet) {
+  const request = store.matchRequests?.[member.requestId] || null;
+  const requestTs = request?.createdAt ? new Date(request.createdAt).getTime() : null;
+  const anchorTs = anchorMeet?.createdAt ? new Date(anchorMeet.createdAt).getTime() : null;
+  const maxAnchorDriftMs = 60 * 60 * 1000; // Keep member-state resolution within same match window.
+
+  const candidates = Object.values(store.meets || {})
+    .filter((m) => m.ownerUserId === member.userId)
+    .filter((m) =>
+      ['FOUND', 'CONFIRMED', 'VENUE_SHARED', 'CANCELLED', 'ARCHIVED'].includes(
+        String(m.status || '').toUpperCase()
+      )
+    )
+    .filter((m) => {
+      if (!requestTs) return true;
+      return new Date(m.createdAt).getTime() >= requestTs - 1000;
+    });
+
+  if (!candidates.length) return null;
+
+  if (anchorTs) {
+    const ranked = candidates
+      .map((m) => ({
+        meet: m,
+        drift: Math.abs(new Date(m.createdAt).getTime() - anchorTs),
+      }))
+      .sort((a, b) => a.drift - b.drift || new Date(b.meet.createdAt).getTime() - new Date(a.meet.createdAt).getTime());
+
+    if (ranked[0] && ranked[0].drift <= maxAnchorDriftMs) {
+      return ranked[0].meet;
+    }
+  }
+
+  return candidates.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+}
+
 function findGroupIdForMeet(store, meet) {
   const ownerRequests = Object.values(store.matchRequests || {})
     .filter((r) => r.userId === meet.ownerUserId && r.matchedGroupId)
@@ -1099,9 +1135,7 @@ function getMeetParticipantContext(store, meet) {
   members.forEach((member) => {
     const user = store.users?.[member.userId];
     const req = store.matchRequests?.[member.requestId];
-    const openMeet = getOpenMeetForUserAndGroup(store, member.userId, groupId, {
-      includeCancelled: true,
-    });
+    const openMeet = getContextMeetForGroupMember(store, member, groupId, meet);
     let status = 'PENDING';
     const meetStatusUpper = String(openMeet?.status || '').toUpperCase();
     const paymentStatusUpper = String(openMeet?.paymentStatus || '').toUpperCase();
