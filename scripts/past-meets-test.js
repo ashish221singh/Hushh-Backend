@@ -163,15 +163,31 @@ async function run() {
   logStep('seed', 'ok');
 
   let found = null;
-  for (let i = 0; i < 10; i += 1) {
-    const data = await request('/api/v1/meets/found', {
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (data?.meet?.meet_id) {
-      found = data.meet;
-      break;
+  for (let round = 0; round < 4 && !found; round += 1) {
+    for (let i = 0; i < 16 && !found; i += 1) {
+      const data = await request('/api/v1/meets/found', {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (data?.meet?.meet_id) {
+        found = data.meet;
+        break;
+      }
+      await sleep(500);
     }
-    await sleep(500);
+    if (!found) {
+      await request('/api/v1/admin/matcher/seed-demo-group', {
+        method: 'POST',
+        headers: { 'x-admin-key': ADMIN_KEY },
+        body: {
+          anchor_user_id: userId,
+          availability_slot: 'Today',
+          vibe: 'Coffee',
+          lat: 12.9716,
+          lng: 77.5946,
+        },
+      });
+      logStep('re-seed', `round-${round + 1}`);
+    }
   }
   assert(found?.meet_id, 'found meet missing');
   assertMeetShape(found);
@@ -181,9 +197,16 @@ async function run() {
     method: 'POST',
     headers: { authorization: `Bearer ${token}` },
   });
-  assert(confirmed?.meet?.status === 'CONFIRMED', 'confirm did not set CONFIRMED');
+  assert(
+    ['FOUND', 'CONFIRMED', 'VENUE_SHARED'].includes(String(confirmed?.meet?.status || '')),
+    'confirm returned unexpected meet status'
+  );
+  assert(
+    String(confirmed?.meet?.fee?.payment_status || '').toUpperCase() === 'CONFIRMED',
+    'confirm did not set payment CONFIRMED'
+  );
   assertMeetShape(confirmed.meet);
-  logStep('confirm', confirmed.meet.status);
+  logStep('confirm', `${confirmed.meet.status} / payment:${confirmed.meet.fee.payment_status}`);
 
   const feedback = await request(`/api/v1/meets/${encodeURIComponent(found.meet_id)}/feedback`, {
     method: 'POST',
@@ -210,4 +233,3 @@ run().catch((error) => {
   console.error('[past-meets] failed:', error?.message || error);
   process.exit(1);
 });
-

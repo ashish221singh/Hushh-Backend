@@ -60,6 +60,9 @@ const DEFAULT_COMMITMENT_FEE = 39900;
 const COMMITMENT_RESPONSE_WINDOW_MINUTES = Number(
   process.env.COMMITMENT_RESPONSE_WINDOW_MINUTES || 30
 );
+const MEET_MIN_COMMITTED_TO_CONFIRM = Number(
+  process.env.MEET_MIN_COMMITTED_TO_CONFIRM || 3
+);
 const MATCH_GROUP_SIZE = 5;
 const MATCHER_INTERVAL_MS = Number(process.env.MATCHER_INTERVAL_MS || 7000);
 const MATCH_REQUEST_TTL_MINUTES = Number(process.env.MATCH_REQUEST_TTL_MINUTES || 360);
@@ -769,7 +772,7 @@ function applyPaymentStatusUpdate(draft, paymentId, nextStatus, meta = {}) {
     if (nextStatus === 'CONFIRMED') {
       meet.status = 'CONFIRMED';
     } else if (['FAILED', 'CANCELLED', 'REFUNDED'].includes(nextStatus)) {
-      if (meet.status !== 'VENUE_SHARED') {
+      if (meet.status !== 'VENUE_SHARED' && meet.status !== 'CANCELLED') {
         meet.status = 'FOUND';
       }
       if (nextStatus === 'REFUNDED') {
@@ -777,10 +780,186 @@ function applyPaymentStatusUpdate(draft, paymentId, nextStatus, meta = {}) {
         meet.venueShareEtaMins = 30;
       }
     }
+    syncGroupMeetCommitmentStates(draft, meet);
     meet.updatedAt = now;
   }
 
   return { payment, meet };
+}
+
+function getGroupMemberCommitmentSummary(store, groupId) {
+  const members = Object.values(store.matchGroupMembers || {}).filter((m) => m.groupId === groupId);
+  if (!members.length) {
+    return {
+      members: [],
+      total_members: 0,
+      committed_members: 0,
+      pending_members: 0,
+      cancelled_members: 0,
+      possible_members: 0,
+      open_meet_members: 0,
+      committed_meets: [],
+      pending_meets: [],
+      all_open_meet_deadline_passed: false,
+      viability_impossible: true,
+    };
+  }
+
+  let committed = 0;
+  let pending = 0;
+  let cancelled = 0;
+  const nowTs = Date.now();
+  const memberStates = members.map((member) => {
+    const req = store.matchRequests?.[member.requestId];
+    const requestCancelled = String(req?.status || '').toUpperCase() === 'CANCELLED';
+    const openMeet = getOpenMeetForUserAndGroup(store, member.userId, groupId);
+    const paymentStatus = String(openMeet?.paymentStatus || '').toUpperCase();
+    const meetStatus = String(openMeet?.status || '').toUpperCase();
+    const committedState =
+      paymentStatus === 'CONFIRMED' || ['CONFIRMED', 'VENUE_SHARED'].includes(meetStatus);
+    const deadlineAt = openMeet?.commitmentDeadlineAt || null;
+    const deadlineTs = deadlineAt ? new Date(deadlineAt).getTime() : null;
+    const deadlinePassed = Number.isFinite(deadlineTs) ? deadlineTs <= nowTs : false;
+
+    if (requestCancelled) cancelled += 1;
+    else if (committedState) committed += 1;
+    else pending += 1;
+
+    return {
+      ...member,
+      requestCancelled,
+      committedState,
+      openMeetId: openMeet?.meetId || null,
+      deadlinePassed,
+    };
+  });
+
+  const possibleMembers = committed + pending;
+  const openMeetStates = memberStates.filter((m) => m.openMeetId);
+  const allOpenDeadlinePassed =
+    openMeetStates.length > 0 && openMeetStates.every((m) => m.deadlinePassed);
+
+  return {
+    members: memberStates,
+    total_members: members.length,
+    committed_members: committed,
+    pending_members: pending,
+    cancelled_members: cancelled,
+    possible_members: possibleMembers,
+    open_meet_members: openMeetStates.length,
+    committed_meets: openMeetStates.filter((m) => m.committedState && !m.requestCancelled),
+    pending_meets: openMeetStates.filter((m) => !m.committedState && !m.requestCancelled),
+    all_open_meet_deadline_passed: allOpenDeadlinePassed,
+    viability_impossible: possibleMembers < MEET_MIN_COMMITTED_TO_CONFIRM,
+  };
+}
+
+function syncGroupMeetCommitmentStates(store, meet) {
+  if (!store || !meet) return null;
+  const groupId = findGroupIdForMeet(store, meet);
+  if (!groupId) return null;
+
+  const summary = getGroupMemberCommitmentSummary(store, groupId);
+  if (!summary.total_members) return null;
+
+  const shouldConfirm = summary.committed_members >= MEET_MIN_COMMITTED_TO_CONFIRM;
+  const shouldCancel =
+    summary.committed_members < MEET_MIN_COMMITTED_TO_CONFIRM &&
+    (summary.viability_impossible || summary.all_open_meet_deadline_passed);
+  const now = nowIso();
+  let transitionedToConfirmed = false;
+  let transitionedToCancelled = false;
+
+  summary.members.forEach((memberState) => {
+    if (!memberState.openMeetId) return;
+    const next = store.meets?.[memberState.openMeetId];
+    if (!next || next.status === 'VENUE_SHARED') return;
+    if (shouldCancel) {
+      if (String(next.status || '').toUpperCase() !== 'CANCELLED') {
+        transitionedToCancelled = true;
+      }
+      next.status = 'CANCELLED';
+      next.venueHidden = true;
+      next.venueShareEtaMins = null;
+      const paymentId = next.paymentId || null;
+      if (paymentId && store.payments?.[paymentId]) {
+        const payment = store.payments[paymentId];
+        const priorStatus = String(payment.status || '').toUpperCase();
+        if (priorStatus === 'CONFIRMED') {
+          payment.status = 'REFUNDED';
+          payment.updatedAt = now;
+          payment.confirmedAt = payment.confirmedAt || now;
+        } else if (priorStatus === 'PENDING') {
+          payment.status = 'CANCELLED';
+          payment.updatedAt = now;
+        }
+        next.paymentStatus = payment.status;
+      }
+    } else if (shouldConfirm && memberState.committedState) {
+      if (String(next.status || '').toUpperCase() !== 'CONFIRMED') {
+        transitionedToConfirmed = true;
+      }
+      next.status = 'CONFIRMED';
+    } else {
+      next.status = 'FOUND';
+    }
+    next.updatedAt = now;
+  });
+
+  if (shouldConfirm && transitionedToConfirmed) {
+    addMatchEvent(store, {
+      requestId: null,
+      groupId,
+      type: 'GROUP_CONFIRMED',
+      message: `Group confirmed (${summary.committed_members}+ committed)`,
+      payload: {
+        group_id: groupId,
+        committed_members: summary.committed_members,
+        pending_members: summary.pending_members,
+        cancelled_members: summary.cancelled_members,
+      },
+    });
+  }
+  if (shouldCancel && transitionedToCancelled) {
+    addMatchEvent(store, {
+      requestId: null,
+      groupId,
+      type: 'GROUP_CANCELLED',
+      message: 'Group cancelled (insufficient committed members)',
+      payload: {
+        group_id: groupId,
+        committed_members: summary.committed_members,
+        pending_members: summary.pending_members,
+        cancelled_members: summary.cancelled_members,
+      },
+    });
+  }
+
+  return {
+    group_id: groupId,
+    total_members: summary.total_members,
+    committed_members: summary.committed_members,
+    pending_members: summary.pending_members,
+    cancelled_members: summary.cancelled_members,
+    min_committed_to_confirm: MEET_MIN_COMMITTED_TO_CONFIRM,
+    confirmed: shouldConfirm,
+    cancelled: shouldCancel,
+  };
+}
+
+function reconcileAllGroupMeetStates() {
+  mutateStore((draft) => {
+    const processedGroups = new Set();
+    const candidateMeets = Object.values(draft.meets || {}).filter((m) =>
+      ['FOUND', 'CONFIRMED', 'VENUE_SHARED', 'CANCELLED'].includes(String(m.status || '').toUpperCase())
+    );
+    candidateMeets.forEach((meet) => {
+      const groupId = findGroupIdForMeet(draft, meet);
+      if (!groupId || processedGroups.has(groupId)) return;
+      processedGroups.add(groupId);
+      syncGroupMeetCommitmentStates(draft, meet);
+    });
+  });
 }
 
 function parseNumberOrNull(value) {
@@ -853,13 +1032,18 @@ function getLatestMatchedRequestForUserInGroup(store, userId, groupId) {
   );
 }
 
-function getOpenMeetForUserAndGroup(store, userId, groupId) {
+function getOpenMeetForUserAndGroup(store, userId, groupId, options = {}) {
+  const includeCancelled = Boolean(options.includeCancelled);
   const matchedReq = getLatestMatchedRequestForUserInGroup(store, userId, groupId);
   const threshold = matchedReq?.createdAt ? new Date(matchedReq.createdAt).getTime() : null;
   return (
     Object.values(store.meets || {})
       .filter((m) => m.ownerUserId === userId)
-      .filter((m) => ['FOUND', 'CONFIRMED', 'VENUE_SHARED'].includes(String(m.status || '')))
+      .filter((m) =>
+        includeCancelled
+          ? ['FOUND', 'CONFIRMED', 'VENUE_SHARED', 'CANCELLED'].includes(String(m.status || ''))
+          : ['FOUND', 'CONFIRMED', 'VENUE_SHARED'].includes(String(m.status || ''))
+      )
       .filter((m) => (threshold ? new Date(m.createdAt).getTime() >= threshold : true))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] || null
   );
@@ -915,15 +1099,20 @@ function getMeetParticipantContext(store, meet) {
   members.forEach((member) => {
     const user = store.users?.[member.userId];
     const req = store.matchRequests?.[member.requestId];
-    const openMeet = getOpenMeetForUserAndGroup(store, member.userId, groupId);
+    const openMeet = getOpenMeetForUserAndGroup(store, member.userId, groupId, {
+      includeCancelled: true,
+    });
     let status = 'PENDING';
-    if (String(req?.status || '').toUpperCase() === 'CANCELLED') {
+    const meetStatusUpper = String(openMeet?.status || '').toUpperCase();
+    const paymentStatusUpper = String(openMeet?.paymentStatus || '').toUpperCase();
+    if (
+      String(req?.status || '').toUpperCase() === 'CANCELLED' ||
+      meetStatusUpper === 'CANCELLED' ||
+      ['REFUNDED', 'CANCELLED'].includes(paymentStatusUpper)
+    ) {
       status = 'CANCELLED';
       cancelled += 1;
-    } else if (
-      String(openMeet?.paymentStatus || '').toUpperCase() === 'CONFIRMED' ||
-      ['CONFIRMED', 'VENUE_SHARED'].includes(String(openMeet?.status || ''))
-    ) {
+    } else if (paymentStatusUpper === 'CONFIRMED' || ['CONFIRMED', 'VENUE_SHARED'].includes(meetStatusUpper)) {
       status = 'COMMITTED';
       committed += 1;
     } else {
@@ -1507,6 +1696,7 @@ function runMatchingCycle() {
   matcherRunning = true;
   try {
     markExpiredQueuedRequests();
+    reconcileAllGroupMeetStates();
     const store = getStore();
     const queued = Object.values(store.matchRequests || {})
       .filter((r) => r.status === 'QUEUED')
@@ -2335,6 +2525,7 @@ async function handleMeetActive(req, res) {
   const session = withAuth(req, res);
   if (!session) return;
 
+  reconcileAllGroupMeetStates();
   const store = getStore();
   const active = getUserMeets(session.userId).find((meet) =>
     ['CONFIRMED', 'VENUE_SHARED'].includes(meet.status)
@@ -2358,6 +2549,7 @@ async function handleMeetOpen(req, res) {
   const session = withAuth(req, res);
   if (!session) return;
 
+  reconcileAllGroupMeetStates();
   const store = getStore();
   const meets = getUserMeets(session.userId).filter((meet) =>
     ['FOUND', 'CONFIRMED', 'VENUE_SHARED'].includes(meet.status)
@@ -2367,6 +2559,21 @@ async function handleMeetOpen(req, res) {
     data: {
       meets: meets.map((meet) => formatMeetPayload(meet, store)),
     },
+  });
+}
+
+async function handleMeetCancelled(req, res) {
+  if (req.method !== 'GET') return methodNotAllowed(res);
+  const session = withAuth(req, res);
+  if (!session) return;
+  reconcileAllGroupMeetStates();
+  const store = getStore();
+  const meets = getUserMeets(session.userId)
+    .filter((meet) => String(meet.status || '').toUpperCase() === 'CANCELLED')
+    .map((meet) => formatMeetPayload(meet, store));
+  return sendJson(res, 200, {
+    success: true,
+    data: { meets },
   });
 }
 
@@ -2390,6 +2597,7 @@ async function handleMeetPast(req, res) {
   if (req.method !== 'GET') return methodNotAllowed(res);
   const session = withAuth(req, res);
   if (!session) return;
+  reconcileAllGroupMeetStates();
   const store = getStore();
   const feedbackMeetIds = new Set(
     Object.values(store.feedback || {})
@@ -2415,6 +2623,7 @@ async function handleMeetFound(req, res) {
   const session = withAuth(req, res);
   if (!session) return;
 
+  reconcileAllGroupMeetStates();
   let foundMeet = getUserMeets(session.userId).find((meet) => meet.status === 'FOUND');
   if (foundMeet?.meetId && !foundMeet?.commitmentDeadlineAt) {
     mutateStore((draft) => {
@@ -3128,6 +3337,15 @@ async function handleMeetShareVenue(req, res, meetId) {
       error: { code: 'NOT_FOUND', message: 'Meet not found' },
     });
   }
+  if (!['CONFIRMED', 'VENUE_SHARED'].includes(String(meet.status || '').toUpperCase())) {
+    return sendJson(res, 400, {
+      success: false,
+      error: {
+        code: 'GROUP_NOT_READY',
+        message: `Venue can be shared once at least ${MEET_MIN_COMMITTED_TO_CONFIRM} members are committed`,
+      },
+    });
+  }
 
   mutateStore((draft) => {
     if (!draft.meets?.[meetId]) return;
@@ -3392,7 +3610,9 @@ async function handleAdminMatchGroups(req, res, url) {
         .map((m) => {
           const user = store.users?.[m.userId];
           const request = store.matchRequests?.[m.requestId];
-          const openMeet = getOpenMeetForUserAndGroup(store, m.userId, group.groupId);
+          const openMeet = getOpenMeetForUserAndGroup(store, m.userId, group.groupId, {
+            includeCancelled: true,
+          });
           const paymentStatus = String(openMeet?.paymentStatus || '').toUpperCase();
           const committed =
             paymentStatus === 'CONFIRMED' ||
@@ -3409,6 +3629,7 @@ async function handleAdminMatchGroups(req, res, url) {
             meet_id: openMeet?.meetId || null,
             meet_status: openMeet?.status || null,
             payment_status: openMeet?.paymentStatus || null,
+            request_status: request?.status || null,
             committed,
             preference: request
               ? {
@@ -3419,12 +3640,17 @@ async function handleAdminMatchGroups(req, res, url) {
                   age_max: request.ageMax ?? null,
                   lat: request.lat ?? null,
                   lng: request.lng ?? null,
+                  request_status: request.status || null,
                 }
               : null,
           };
         });
       const committedMembers = members.filter((m) => m.committed);
-      const canShareVenue = committedMembers.length > 0;
+      const cancelledMembers = members.filter(
+        (m) => String(m?.preference?.request_status || m?.request_status || '').toUpperCase() === 'CANCELLED'
+      );
+      const pendingMembers = members.length - committedMembers.length - cancelledMembers.length;
+      const canShareVenue = committedMembers.length >= MEET_MIN_COMMITTED_TO_CONFIRM;
 
       return {
         group_id: group.groupId,
@@ -3435,13 +3661,15 @@ async function handleAdminMatchGroups(req, res, url) {
         score: group.score ?? null,
         member_count: members.length,
         committed_count: committedMembers.length,
+        pending_count: Math.max(0, pendingMembers),
+        cancelled_count: cancelledMembers.length,
         can_share_venue: canShareVenue,
         members,
         created_at: group.createdAt,
         updated_at: group.updatedAt,
       };
     })
-    .filter((g) => (committedOnly ? g.committed_count > 0 : true))
+    .filter((g) => (committedOnly ? g.can_share_venue : true))
     .slice(0, limit);
 
   return sendJson(res, 200, {
@@ -3576,26 +3804,34 @@ async function handleAdminMatchGroupShareVenue(req, res, groupId) {
   }
 
   const members = Object.values(store.matchGroupMembers || {}).filter((m) => m.groupId === groupId);
-  const committedUsers = members
+  const memberStates = members
     .map((m) => {
       const meet = getOpenMeetForUserAndGroup(store, m.userId, groupId);
+      const req = store.matchRequests?.[m.requestId];
+      const requestCancelled = String(req?.status || '').toUpperCase() === 'CANCELLED';
       const committed =
         String(meet?.paymentStatus || '').toUpperCase() === 'CONFIRMED' ||
         ['CONFIRMED', 'VENUE_SHARED'].includes(String(meet?.status || ''));
       return {
         userId: m.userId,
         meetId: meet?.meetId || null,
+        requestCancelled,
         committed,
       };
-    })
-    .filter((item) => item.committed && item.meetId);
+    });
 
-  if (!committedUsers.length) {
+  const cancelledCount = memberStates.filter((item) => item.requestCancelled).length;
+  const pendingCount = memberStates.filter((item) => !item.requestCancelled && !item.committed).length;
+  const committedCount = memberStates.filter((item) => item.committed).length;
+  const committedUsers = memberStates.filter((item) => item.committed && item.meetId);
+  const canShareVenue = committedCount >= MEET_MIN_COMMITTED_TO_CONFIRM;
+
+  if (!canShareVenue || !committedUsers.length) {
     return sendJson(res, 400, {
       success: false,
       error: {
-        code: 'NO_COMMITTED_MEMBERS',
-        message: 'No committed members found in this group',
+        code: 'GROUP_NOT_READY',
+        message: `Venue can be shared once at least ${MEET_MIN_COMMITTED_TO_CONFIRM} members are committed`,
       },
     });
   }
@@ -3643,7 +3879,74 @@ async function handleAdminMatchGroupShareVenue(req, res, groupId) {
     data: {
       group_id: groupId,
       committed_count: committedUsers.length,
+      pending_count: pendingCount,
+      cancelled_count: cancelledCount,
       meets: updatedMeets,
+    },
+  });
+}
+
+async function handleAdminMatchGroupExpireDeadline(req, res, groupId) {
+  if (req.method !== 'POST') return methodNotAllowed(res);
+  if (!withAdmin(req, res)) return;
+
+  let touched = 0;
+  mutateStore((draft) => {
+    const members = Object.values(draft.matchGroupMembers || {}).filter((m) => m.groupId === groupId);
+    members.forEach((m) => {
+      const openMeet = getOpenMeetForUserAndGroup(draft, m.userId, groupId, { includeCancelled: true });
+      if (!openMeet?.meetId) return;
+      const meet = draft.meets?.[openMeet.meetId];
+      if (!meet) return;
+      if (['VENUE_SHARED', 'CANCELLED', 'ARCHIVED'].includes(String(meet.status || '').toUpperCase())) return;
+      meet.commitmentDeadlineAt = new Date(Date.now() - 60_000).toISOString();
+      meet.updatedAt = nowIso();
+      touched += 1;
+    });
+    const anchorMember = members[0];
+    if (anchorMember) {
+      const openMeet = getOpenMeetForUserAndGroup(draft, anchorMember.userId, groupId, {
+        includeCancelled: true,
+      });
+      if (openMeet) {
+        syncGroupMeetCommitmentStates(draft, openMeet);
+      }
+    }
+    addMatchEvent(draft, {
+      requestId: null,
+      groupId,
+      type: 'TEST_DEADLINE_EXPIRED',
+      message: 'Group commitment deadline force-expired via admin',
+      payload: { group_id: groupId, touched_meets: touched },
+    });
+  });
+
+  const after = getStore();
+  const meets = Object.values(after.meets || {})
+    .filter((meet) => findGroupIdForMeet(after, meet) === groupId)
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .map((meet) => formatMeetPayload(meet, after));
+
+  return sendJson(res, 200, {
+    success: true,
+    data: {
+      group_id: groupId,
+      touched_meets: touched,
+      meets,
+    },
+  });
+}
+
+async function handleAdminResetTestRateLimits(req, res) {
+  if (req.method !== 'POST') return methodNotAllowed(res);
+  if (!withAdmin(req, res)) return;
+  const prior = rateLimitBuckets.size;
+  rateLimitBuckets.clear();
+  return sendJson(res, 200, {
+    success: true,
+    data: {
+      cleared: prior,
+      message: 'Rate-limit buckets cleared',
     },
   });
 }
@@ -4594,6 +4897,16 @@ async function route(req, res) {
       decodeURIComponent(adminGroupVenueUpdateMatch[1])
     );
   }
+  const adminGroupExpireDeadlineMatch = url.pathname.match(
+    /^\/api\/v1\/admin\/match-groups\/([^/]+)\/expire-deadline$/
+  );
+  if (adminGroupExpireDeadlineMatch) {
+    return handleAdminMatchGroupExpireDeadline(
+      req,
+      res,
+      decodeURIComponent(adminGroupExpireDeadlineMatch[1])
+    );
+  }
   const meetFeedbackMatch = url.pathname.match(/^\/api\/v1\/meets\/([^/]+)\/feedback$/);
   if (meetFeedbackMatch) {
     return handleMeetFeedback(req, res, decodeURIComponent(meetFeedbackMatch[1]));
@@ -4639,6 +4952,7 @@ async function route(req, res) {
   if (url.pathname === '/api/v1/match-requests/active') return handleGetActiveMatchRequest(req, res);
   if (url.pathname === '/api/v1/meets/active') return handleMeetActive(req, res);
   if (url.pathname === '/api/v1/meets/open') return handleMeetOpen(req, res);
+  if (url.pathname === '/api/v1/meets/cancelled') return handleMeetCancelled(req, res);
   if (url.pathname === '/api/v1/meets/past') return handleMeetPast(req, res);
   if (url.pathname === '/api/v1/meets/found') return handleMeetFound(req, res);
   if (url.pathname === '/api/v1/users/block') return handleBlockUser(req, res);
@@ -4650,6 +4964,7 @@ async function route(req, res) {
   if (url.pathname === '/api/v1/admin/match-queue') return handleAdminMatchQueue(req, res, url);
   if (url.pathname === '/api/v1/admin/meets') return handleAdminMeets(req, res, url);
   if (url.pathname === '/api/v1/admin/match-groups') return handleAdminMatchGroups(req, res, url);
+  if (url.pathname === '/api/v1/admin/test/reset-rate-limits') return handleAdminResetTestRateLimits(req, res);
   if (url.pathname === '/api/v1/admin/matcher/seed-demo-group') return handleAdminMatcherSeedDemo(req, res);
   if (url.pathname === '/api/v1/dev/matcher/seed-self') return handleDevMatcherSeedSelf(req, res);
 
